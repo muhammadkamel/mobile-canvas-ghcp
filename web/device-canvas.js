@@ -1,13 +1,18 @@
 import { creatablePlatforms, createOptions } from "./create-device-options.js";
 import {
   canBootDeviceState,
+  canResumeLiveView,
   clearStoredDeviceId,
   deviceStatusPresentation,
+  emptySelectionPresentation,
   formatDeviceState,
+  initialPanelVisible,
+  isCurrentDevice,
   organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
   shouldDrainIdleDecoder,
+  shouldShowConnectingStatus,
   storeDeviceId,
 } from "./canvas-state.js";
 
@@ -96,6 +101,7 @@ const state = {
   socket: null,
   decoder: null,
   pngTimer: null,
+  streamWatchdog: null,
   frameCounter: 0,
   frameClock: performance.now(),
   parser: null,
@@ -117,7 +123,7 @@ const state = {
   selectionTarget: null,
   selectionVersion: 0,
   followTarget: null,
-  panelVisible: !document.hidden,
+  panelVisible: initialPanelVisible(Boolean(transport?.onVisibilityChanged), document.hidden),
 };
 
 async function api(path, options = {}) {
@@ -516,13 +522,7 @@ function showEmptySelection() {
   state.display = null;
   elements.view.classList.add("hidden");
   elements.detached.classList.add("hidden");
-  configureEmptyState({
-    tone: "accent",
-    icon: "#icon-device",
-    title: "Select a device",
-    detail: "Choose an existing target, or create one from an installed runtime.",
-    action: { id: "create", label: "New device", icon: "#icon-plus" },
-  });
+  configureEmptyState(emptySelectionPresentation());
   elements.empty.classList.remove("hidden");
   setStreamMode("idle");
   setActualFps(0);
@@ -894,6 +894,10 @@ function setText(element, value) {
 }
 
 function hideDeviceStatus() {
+  if (state.streamWatchdog) {
+    clearTimeout(state.streamWatchdog);
+    state.streamWatchdog = null;
+  }
   elements.overlay.classList.add("hidden");
   elements.frame.dataset.status = "streaming";
 }
@@ -902,7 +906,9 @@ function startStream() {
   stopStream();
   if (!state.panelVisible || !state.selected || state.selected.state !== "booted") return;
 
-  showDeviceStatus("connecting");
+  if (shouldShowConnectingStatus(state.framePainted)) {
+    showDeviceStatus("connecting");
+  }
   setStreamMode("connecting");
   state.frameClock = performance.now();
 
@@ -929,6 +935,11 @@ function startStream() {
   socket.binaryType = "arraybuffer";
   const parser = new AnnexBDecoder();
   state.parser = parser;
+  state.streamWatchdog = setTimeout(() => {
+    if (state.socket === socket && !state.framePainted) {
+      startPngFallback("PNG");
+    }
+  }, 4000);
 
   socket.addEventListener("message", (event) => {
     if (state.socket !== socket) return;
@@ -960,6 +971,10 @@ function startStream() {
   });
   socket.addEventListener("close", () => {
     if (state.socket === socket && !state.pngTimer && !state.detached) {
+      if (!state.panelVisible) {
+        state.socket = null;
+        return;
+      }
       startPngFallback("PNG");
     }
   });
@@ -992,8 +1007,11 @@ function stopStream() {
     clearTimeout(state.pngTimer);
     state.pngTimer = null;
   }
+  if (state.streamWatchdog) {
+    clearTimeout(state.streamWatchdog);
+    state.streamWatchdog = null;
+  }
   state.frameCounter = 0;
-  state.framePainted = false;
   state.activeScale = null;
   clearTimeout(state.scaleTimer);
   setActualFps(0);
@@ -1124,6 +1142,7 @@ function clearScreen() {
   elements.canvas.width = 180;
   elements.canvas.height = 400;
   state.canvasContext = null;
+  state.framePainted = false;
 }
 
 function drawVideoFrame(frame) {
@@ -1235,6 +1254,10 @@ function startPngFallback(label) {
     || !state.selected
     || state.selected.state !== "booted"
   ) return;
+  if (state.streamWatchdog) {
+    clearTimeout(state.streamWatchdog);
+    state.streamWatchdog = null;
+  }
   applyCaptureSource({ source: "png", sourceDetail: "Screenshot polling fallback." });
   if (state.socket) {
     const socket = state.socket;
@@ -1433,6 +1456,7 @@ const automation = {
 function connectAutomationEvents() {
   clearTimeout(automation.retryTimer);
   if (!state.panelVisible || state.detached) return;
+  if (automation.socket) return;
   let socket;
   try {
     socket = createSocket("events");
@@ -1503,7 +1527,7 @@ function addressedToThisCanvas(activity) {
 
 async function followSelection(deviceId) {
   if (!deviceId || state.detached) return;
-  if (state.selectionTarget === deviceId || state.selected?.id === deviceId) return;
+  if (isCurrentDevice(state.selected, deviceId) || state.selectionTarget === deviceId) return;
 
   state.followTarget = deviceId;
   let device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
@@ -1519,10 +1543,17 @@ async function followSelection(deviceId) {
 
 async function reconcileAnnouncedSelection(deviceId, guard = () => true) {
   if (!deviceId || state.detached) return;
+  if (isCurrentDevice(state.selected, deviceId) && canResumeLiveView(state.selected, Boolean(state.display))) {
+    return;
+  }
   state.followTarget = deviceId;
   await loadCatalog();
   if (!guard() || state.followTarget !== deviceId) return;
   const device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
+  if (isCurrentDevice(state.selected, device?.id) && canResumeLiveView(device, Boolean(state.display))) {
+    state.selected = device;
+    return;
+  }
   if (device) {
     await selectDevice(device, false);
   } else {
@@ -2423,12 +2454,13 @@ function setPanelVisible(visible) {
   const visibilityVersion = ++panelVisibilityVersion;
   state.panelVisible = visible;
   if (!visible) {
-    stopStream();
-    clearTimeout(automation.retryTimer);
-    const socket = automation.socket;
-    automation.socket = null;
-    socket?.close();
+    // Keep the live stream. Tearing it down is what flashes "Live view" ~2s after
+    // returning to the Activity Bar, once selection reconcile restarts the socket.
     endAutomation();
+    return;
+  }
+  if (state.socket && canResumeLiveView(state.selected, Boolean(state.display))) {
+    connectAutomationEvents();
     return;
   }
   if (!state.detached) {
@@ -2441,7 +2473,7 @@ function setPanelVisible(visible) {
       isActive,
       // A device can finish booting while its host session is hidden. Re-read its state before
       // deciding whether a stream can start instead of reconnecting from the stale "booting" record.
-      refresh,
+      refresh: resumeVisiblePanel,
       resume: () => {
         connectAutomationEvents();
       },
@@ -2451,8 +2483,24 @@ function setPanelVisible(visible) {
   }
 }
 
-document.addEventListener("visibilitychange", () => setPanelVisible(!document.hidden));
-transport?.onVisibilityChanged?.(setPanelVisible);
+async function resumeVisiblePanel() {
+  if (canResumeLiveView(state.selected, Boolean(state.display))) {
+    await loadCatalog();
+    const updated = state.catalog?.devices?.find((device) => device.id === state.selected.id);
+    if (canResumeLiveView(updated, Boolean(state.display))) {
+      state.selected = updated;
+      startStream();
+      return;
+    }
+  }
+  await refresh();
+}
+
+if (transport?.onVisibilityChanged) {
+  transport.onVisibilityChanged(setPanelVisible);
+} else {
+  document.addEventListener("visibilitychange", () => setPanelVisible(!document.hidden));
+}
 let transportRefresh = Promise.resolve();
 transport?.onRefreshRequested?.(() => {
   if (!state.detached) {

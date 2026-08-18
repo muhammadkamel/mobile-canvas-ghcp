@@ -5,6 +5,15 @@ import * as vscode from "vscode";
 import { registerChatTools } from "./chatTools";
 import { VIEW_ID, VIEW_INSTANCE_ID, MobileCanvasViewProvider } from "./viewProvider";
 
+export const WEBVIEW_VIEW_OPTIONS = {
+  webviewOptions: {
+    // Without this, clicking the Activity Bar icon destroys the webview. The next click
+    // re-opens the same host session while the previous close is still in flight, so the
+    // live view stays on "Connecting..." indefinitely.
+    retainContextWhenHidden: true,
+  },
+};
+
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Mobile Canvas");
   const viewSessionId = randomUUID();
@@ -20,7 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     output,
     viewProvider,
-    vscode.window.registerWebviewViewProvider(VIEW_ID, viewProvider),
+    vscode.window.registerWebviewViewProvider(VIEW_ID, viewProvider, WEBVIEW_VIEW_OPTIONS),
     vscode.commands.registerCommand("mobileCanvas.open", async () => {
       await vscode.commands.executeCommand("workbench.view.extension.mobileCanvas");
       await vscode.commands.executeCommand(`${VIEW_ID}.focus`);

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import * as vscode from "vscode";
 import { WebSocketServer } from "ws";
 import { CHAT_TOOL_NAMES } from "../../chatTools";
-import { createMcpDefinition } from "../../extension";
+import { createMcpDefinition, WEBVIEW_VIEW_OPTIONS } from "../../extension";
 import { HostBridge } from "../../hostBridge";
 import type { ExtensionMessage } from "../../messages";
 import { applyViewTitle, VIEW_INSTANCE_ID } from "../../viewProvider";
@@ -62,6 +62,11 @@ async function verifyActivation(): Promise<void> {
   );
   assert.equal(definition.version, extension.packageJSON.version);
   assert.equal(definition.cwd?.toString(), extension.extensionUri.toString());
+  assert.equal(
+    WEBVIEW_VIEW_OPTIONS.webviewOptions?.retainContextWhenHidden,
+    true,
+    "the Activity Bar view must keep its live stream when the icon is clicked again",
+  );
 
   const titleTarget: { title?: string; description?: string } = {};
   applyViewTitle(titleTarget, "  Pixel\n6  ", " Android 15  ·  booted ");
@@ -403,10 +408,29 @@ if (args[0] === "canvas" && args[1] === "open") {
     );
     await bridge.handleMessage({ type: "socket-close", id: "video-next" });
 
+    await bridge.handleMessage({
+      type: "socket-open",
+      id: "video-hide",
+      channel: "video",
+    });
+    await waitForMessage(
+      messages,
+      (message) => message.type === "socket-opened" && message.id === "video-hide",
+    );
+    const beforeHide = messages.length;
     await bridge.setVisible(false);
-    assert.ok(messages.some(
-      (message) => message.type === "visibility" && !message.visible,
-    ));
+    await waitFor(() =>
+      messages.slice(beforeHide).some((message) =>
+        message.type === "visibility" && !message.visible
+      )
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(
+      !messages.slice(beforeHide).some((message) =>
+        message.type === "socket-closed" && message.id === "video-hide"
+      ),
+      "hiding the view must keep the live stream so returning does not flash Live view",
+    );
     const bootstrapsBeforeRestart = bootstrapBodies.length;
     await bridge.restart();
     await bridge.handleMessage({ type: "ready" });
