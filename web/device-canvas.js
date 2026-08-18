@@ -9,9 +9,14 @@ import {
   initialPanelVisible,
   isCurrentDevice,
   organizeDiagnostics,
+  prepareScreenshotDrag,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
+  SCREENSHOT_PREVIEW_MS,
+  screenshotFileName,
+  screenSourceRotation,
   shouldDrainIdleDecoder,
+  shouldHoldScreenshotPreview,
   shouldShowConnectingStatus,
   storeDeviceId,
 } from "./canvas-state.js";
@@ -72,6 +77,9 @@ const elements = {
   confirmMessage: document.querySelector("#confirm-message"),
   confirmSubmit: document.querySelector("#confirm-submit"),
   toast: document.querySelector("#toast"),
+  screenshotPreview: document.querySelector("#screenshot-preview"),
+  screenshotPreviewImage: document.querySelector("#screenshot-preview-image"),
+  screenshotPreviewDismiss: document.querySelector("#screenshot-preview-dismiss"),
   record: document.querySelector("#record-button"),
   copyUdid: document.querySelector("#copy-udid"),
   inputIndicator: document.querySelector("#input-indicator"),
@@ -1179,11 +1187,13 @@ function drawVideoFrame(frame) {
  * only when the source and reported display aspects disagree, so native landscape frames stay untouched.
  */
 function drawScreenSource(source, sourceX, sourceY, sourceWidth, sourceHeight) {
-  const displayLandscape = state.display?.pointWidth > state.display?.pointHeight;
-  const sourceLandscape = sourceWidth > sourceHeight;
-  const rotation = displayLandscape !== sourceLandscape
-    ? (state.display?.orientation === "landscape-right" ? 90 : -90)
-    : 0;
+  const rotation = screenSourceRotation({
+    displayWidth: state.display?.pointWidth,
+    displayHeight: state.display?.pointHeight,
+    sourceWidth,
+    sourceHeight,
+    orientation: state.display?.orientation,
+  });
   const width = rotation === 0 ? sourceWidth : sourceHeight;
   const height = rotation === 0 ? sourceHeight : sourceWidth;
 
@@ -1196,13 +1206,7 @@ function drawScreenSource(source, sourceX, sourceY, sourceWidth, sourceHeight) {
 
   const context = canvasContext();
   context.save();
-  if (rotation < 0) {
-    context.translate(0, height);
-    context.rotate(-Math.PI / 2);
-  } else if (rotation > 0) {
-    context.translate(width, 0);
-    context.rotate(Math.PI / 2);
-  }
+  applyScreenSourceRotation(context, rotation, width, height);
   context.drawImage(
     source,
     sourceX,
@@ -1215,6 +1219,16 @@ function drawScreenSource(source, sourceX, sourceY, sourceWidth, sourceHeight) {
     sourceHeight,
   );
   context.restore();
+}
+
+function applyScreenSourceRotation(context, rotation, width, height) {
+  if (rotation < 0) {
+    context.translate(0, height);
+    context.rotate(-Math.PI / 2);
+  } else if (rotation > 0) {
+    context.translate(width, 0);
+    context.rotate(Math.PI / 2);
+  }
 }
 
 // The stream can silently degrade to idb when ScreenCaptureKit is unavailable, which reads as a
@@ -2088,7 +2102,7 @@ for (const button of document.querySelectorAll("[data-action]")) {
         await rotateDevice();
         break;
       case "screenshot":
-        await downloadScreenshot();
+        await takeScreenshot();
         break;
       case "record":
         await toggleRecording();
@@ -2210,23 +2224,201 @@ async function runBusy(button, operation) {
   }
 }
 
-async function downloadScreenshot() {
-  const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/screenshot`);
-  const blob = await response.blob();
-  const suggestedName =
-    `${state.selected.name.replaceAll(/\W+/g, "-").toLowerCase()}-${Date.now()}.png`;
+const screenshotPreview = {
+  file: null,
+  blob: null,
+  url: null,
+  fileUri: null,
+  filePath: null,
+  hideTimer: null,
+  hovering: false,
+  dragging: false,
+  moved: false,
+};
+
+function releaseScreenshotPreviewUrl() {
+  if (screenshotPreview.url) URL.revokeObjectURL(screenshotPreview.url);
+  screenshotPreview.url = null;
+}
+
+function hideScreenshotPreview() {
+  clearTimeout(screenshotPreview.hideTimer);
+  screenshotPreview.hideTimer = null;
+  screenshotPreview.hovering = false;
+  screenshotPreview.dragging = false;
+  screenshotPreview.moved = false;
+  screenshotPreview.file = null;
+  screenshotPreview.blob = null;
+  screenshotPreview.fileUri = null;
+  screenshotPreview.filePath = null;
+  releaseScreenshotPreviewUrl();
+  elements.screenshotPreview.dataset.open = "false";
+  elements.screenshotPreview.setAttribute("aria-hidden", "true");
+  elements.screenshotPreviewImage.removeAttribute("src");
+}
+
+function scheduleScreenshotPreviewHide() {
+  clearTimeout(screenshotPreview.hideTimer);
+  if (shouldHoldScreenshotPreview(screenshotPreview)) return;
+  screenshotPreview.hideTimer = setTimeout(hideScreenshotPreview, SCREENSHOT_PREVIEW_MS);
+}
+
+function showScreenshotPreview({ file, blob, fileUri, filePath }) {
+  clearTimeout(screenshotPreview.hideTimer);
+  releaseScreenshotPreviewUrl();
+  const url = URL.createObjectURL(blob);
+  screenshotPreview.file = file;
+  screenshotPreview.blob = blob;
+  screenshotPreview.url = url;
+  screenshotPreview.fileUri = fileUri || null;
+  screenshotPreview.filePath = filePath || null;
+  screenshotPreview.hovering = false;
+  screenshotPreview.dragging = false;
+  screenshotPreview.moved = false;
+  elements.screenshotPreviewImage.src = url;
+  elements.screenshotPreview.dataset.open = "true";
+  elements.screenshotPreview.setAttribute("aria-hidden", "false");
+  elements.screenshotPreview.setAttribute(
+    "aria-label",
+    `Screenshot ${file.name}. Drag to share, click to save.`,
+  );
+  scheduleScreenshotPreviewHide();
+  void copyScreenshotToClipboard(blob);
+}
+
+async function copyScreenshotToClipboard(blob) {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") return;
+  try {
+    const type = blob.type || "image/png";
+    await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+  } catch {
+    // Webviews often deny image clipboard writes; drag and click-to-save still work.
+  }
+}
+
+async function saveCurrentScreenshot() {
+  const file = screenshotPreview.file;
+  const blob = screenshotPreview.blob;
+  if (!file || !blob) return;
   if (transport?.saveBlob) {
-    if (await transport.saveBlob(blob, suggestedName)) showToast("Screenshot saved");
+    if (await transport.saveBlob(blob, file.name)) {
+      showToast("Screenshot saved");
+      hideScreenshotPreview();
+    }
     return;
   }
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = suggestedName;
+  link.download = file.name;
   link.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
   showToast("Screenshot saved");
+  hideScreenshotPreview();
 }
+
+async function takeScreenshot() {
+  const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/screenshot`);
+  const blob = await response.blob();
+  const png = await orientScreenshotBlob(blob);
+  const name = screenshotFileName(state.selected.name);
+  const file = new File([png], name, { type: "image/png" });
+  let fileUri;
+  let filePath;
+  if (transport?.stageBlob) {
+    try {
+      const staged = await transport.stageBlob(png, name);
+      fileUri = staged?.uri;
+      filePath = staged?.path;
+    } catch {
+      // Staging is only for OS drags; the in-canvas preview still works.
+    }
+  }
+  showScreenshotPreview({ file, blob: png, fileUri, filePath });
+}
+
+async function orientScreenshotBlob(blob) {
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(blob);
+  } catch {
+    return blob.type === "image/png" ? blob : new Blob([blob], { type: "image/png" });
+  }
+  try {
+    const rotation = screenSourceRotation({
+      displayWidth: state.display?.pointWidth,
+      displayHeight: state.display?.pointHeight,
+      sourceWidth: bitmap.width,
+      sourceHeight: bitmap.height,
+      orientation: state.display?.orientation,
+    });
+    if (rotation === 0) {
+      return blob.type === "image/png" ? blob : new Blob([blob], { type: "image/png" });
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.height;
+    canvas.height = bitmap.width;
+    const context = canvas.getContext("2d");
+    applyScreenSourceRotation(context, rotation, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0);
+    const oriented = await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (result) => result
+          ? resolve(result)
+          : reject(new Error("Could not encode screenshot.")),
+        "image/png",
+      );
+    });
+    return oriented;
+  } finally {
+    bitmap.close();
+  }
+}
+
+elements.screenshotPreview.addEventListener("pointerenter", () => {
+  screenshotPreview.hovering = true;
+  clearTimeout(screenshotPreview.hideTimer);
+});
+
+elements.screenshotPreview.addEventListener("pointerleave", () => {
+  screenshotPreview.hovering = false;
+  scheduleScreenshotPreviewHide();
+});
+
+elements.screenshotPreview.addEventListener("dragstart", (event) => {
+  if (!screenshotPreview.file || event.target.closest("#screenshot-preview-dismiss")) {
+    event.preventDefault();
+    return;
+  }
+  screenshotPreview.dragging = true;
+  screenshotPreview.moved = true;
+  prepareScreenshotDrag(event.dataTransfer, {
+    file: screenshotPreview.file,
+    fileUri: screenshotPreview.fileUri,
+    filePath: screenshotPreview.filePath,
+  });
+  event.dataTransfer.setDragImage(elements.screenshotPreviewImage, 16, 16);
+});
+
+elements.screenshotPreview.addEventListener("dragend", () => {
+  screenshotPreview.dragging = false;
+  scheduleScreenshotPreviewHide();
+});
+
+elements.screenshotPreview.addEventListener("click", (event) => {
+  if (event.target.closest("#screenshot-preview-dismiss")) return;
+  if (screenshotPreview.moved) {
+    screenshotPreview.moved = false;
+    return;
+  }
+  void saveCurrentScreenshot();
+});
+
+elements.screenshotPreviewDismiss.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  hideScreenshotPreview();
+});
 
 async function updateRecordingStatus(
   deviceId = state.selected?.id,

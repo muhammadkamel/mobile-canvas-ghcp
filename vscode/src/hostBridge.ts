@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFileSync, unwatchFile, watchFile } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename } from "node:path";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
@@ -96,6 +96,9 @@ export class HostBridge implements vscode.Disposable {
           break;
         case "save":
           await this.save(message.id, message.suggestedName, message.bytes);
+          break;
+        case "stage":
+          await this.stage(message.id, message.suggestedName, message.bytes);
           break;
         case "copy":
           await vscode.env.clipboard.writeText(message.text);
@@ -490,6 +493,32 @@ export class HostBridge implements vscode.Disposable {
     await this.post({ type: "operation-result", id });
   }
 
+  private async stage(
+    id: string,
+    suggestedName: string,
+    bytes: ArrayBuffer,
+  ): Promise<void> {
+    const dir = vscode.Uri.joinPath(
+      vscode.Uri.file(tmpdir()),
+      "mobile-canvas-screenshots",
+    );
+    try {
+      await vscode.workspace.fs.createDirectory(dir);
+    } catch (error) {
+      if (!(error instanceof vscode.FileSystemError) || error.code !== "FileExists") {
+        throw error;
+      }
+    }
+    const dest = vscode.Uri.joinPath(dir, stagedScreenshotName(suggestedName));
+    await vscode.workspace.fs.writeFile(dest, new Uint8Array(bytes));
+    await this.post({
+      type: "operation-result",
+      id,
+      uri: dest.toString(),
+      path: dest.fsPath,
+    });
+  }
+
   private apiUrl(path: string, connection: HostConnection): URL {
     if (
       !path.startsWith("/api/v1/") && !path.startsWith("/ws/")
@@ -655,6 +684,14 @@ function toArrayBuffer(data: RawData): ArrayBuffer {
     bytes.byteOffset,
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
+}
+
+function stagedScreenshotName(suggestedName: string): string {
+  const base = basename(suggestedName || "screenshot.png")
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const name = base || "screenshot.png";
+  return name.toLowerCase().endsWith(".png") ? name : `${name}.png`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

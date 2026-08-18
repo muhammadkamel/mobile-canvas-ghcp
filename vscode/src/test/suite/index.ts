@@ -251,6 +251,20 @@ if (args[0] === "canvas" && args[1] === "open") {
       root: { role: "button", label: "Continue" },
     });
 
+    await bridge.handleMessage({
+      type: "stage",
+      id: "stage-screenshot",
+      suggestedName: "Test iPhone.png",
+      bytes: new Uint8Array([137, 80, 78, 71]).buffer,
+    });
+    const staged = messages.shift();
+    assert.equal(staged?.type, "operation-result");
+    if (staged?.type === "operation-result") {
+      assert.match(staged.path ?? "", /mobile-canvas-screenshots[/\\]Test-iPhone\.png$/);
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(staged.path ?? ""));
+      assert.deepEqual([...bytes], [137, 80, 78, 71]);
+    }
+
     await appendFile(
       refreshSignal,
       '{"type":"refresh","nonce":"refresh-1"}\n',

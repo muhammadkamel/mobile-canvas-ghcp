@@ -181,7 +181,7 @@
               <button class="tool-button" data-action="rotate" type="button" aria-label="Rotate device" title="Rotate device">
                 <svg class="icon" aria-hidden="true"><use href="#icon-rotate"></use></svg>
               </button>
-              <button class="tool-button" data-action="screenshot" type="button" aria-label="Save screenshot" title="Save screenshot">
+              <button class="tool-button" data-action="screenshot" type="button" aria-label="Take screenshot" title="Take screenshot">
                 <svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg>
               </button>
               <button id="record-button" class="tool-button" data-action="record" type="button" aria-label="Start recording" title="Start recording">
@@ -487,6 +487,14 @@
     </form>
   </dialog>
 
+  <aside id="screenshot-preview" class="screenshot-preview" data-open="false" aria-hidden="true"
+         draggable="true" title="Drag to share, click to save">
+    <img id="screenshot-preview-image" class="screenshot-preview-image" alt="" draggable="false">
+    <button id="screenshot-preview-dismiss" class="screenshot-preview-dismiss" type="button"
+            aria-label="Dismiss screenshot">
+      <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
+    </button>
+  </aside>
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   <script type="module" src="/device-canvas.js"></script>
 </body>

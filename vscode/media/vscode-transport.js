@@ -176,6 +176,19 @@
       return !result.cancelled;
     },
 
+    async stageBlob(blob, suggestedName) {
+      const result = await request({
+        type: "stage",
+        id: id(),
+        suggestedName,
+        bytes: await blob.arrayBuffer(),
+      });
+      if (result.cancelled || typeof result.uri !== "string" || !result.uri) {
+        return null;
+      }
+      return { uri: result.uri, path: result.path };
+    },
+
     setViewTitle(title, description) {
       vscode.postMessage({ type: "view-title", title, description });
     },

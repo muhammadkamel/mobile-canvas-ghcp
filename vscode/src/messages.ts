@@ -28,6 +28,7 @@ export type WebviewMessage =
     }
   | { type: "socket-close"; id: string }
   | { type: "save"; id: string; suggestedName: string; bytes: ArrayBuffer }
+  | { type: "stage"; id: string; suggestedName: string; bytes: ArrayBuffer }
   | { type: "copy"; id: string; text: string }
   | { type: "view-title"; title: string; description?: string };
 
@@ -46,7 +47,7 @@ export type ExtensionMessage =
   | { type: "socket-message"; id: string; data: string | ArrayBuffer }
   | { type: "socket-error"; id: string; message: string }
   | { type: "socket-closed"; id: string; code: number; reason: string }
-  | { type: "operation-result"; id: string; cancelled?: boolean }
+  | { type: "operation-result"; id: string; cancelled?: boolean; uri?: string; path?: string }
   | { type: "operation-error"; id: string; message: string }
   | { type: "refresh" }
   | { type: "automation"; activity: AutomationActivity }

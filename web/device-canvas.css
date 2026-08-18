@@ -1678,6 +1678,67 @@ dialog form {
   gap: 8px;
 }
 
+.screenshot-preview {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 70;
+  width: fit-content;
+  line-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: var(--control-radius);
+  background: var(--canvas-default);
+  box-shadow: var(--shadow-popover);
+  cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(12px);
+  transition: opacity var(--motion-fast), transform var(--motion-fast), visibility var(--motion-fast);
+  user-select: none;
+  visibility: hidden;
+  -webkit-user-drag: element;
+}
+
+.screenshot-preview[data-open="true"] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+  visibility: visible;
+}
+
+.screenshot-preview:active {
+  cursor: grabbing;
+}
+
+.screenshot-preview-image {
+  display: block;
+  width: 56px;
+  height: auto;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.screenshot-preview-dismiss {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--scrim);
+  color: var(--fg-default);
+  cursor: pointer;
+}
+
+.screenshot-preview-dismiss:hover {
+  background: var(--control-hover);
+}
+
 .toast {
   position: fixed;
   left: 50%;

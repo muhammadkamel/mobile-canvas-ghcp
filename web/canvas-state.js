@@ -46,6 +46,68 @@ export function isCurrentDevice(current, nextId) {
   return Boolean(current?.id) && current.id === nextId;
 }
 
+export const SCREENSHOT_PREVIEW_MS = 8_000;
+
+export function screenshotFileName(deviceName, now = Date.now()) {
+  const slug = String(deviceName || "device")
+    .replaceAll(/\W+/g, "-")
+    .replaceAll(/^-+|-+$/g, "")
+    .toLowerCase() || "device";
+  return `${slug}-${now}.png`;
+}
+
+export function shouldHoldScreenshotPreview({ hovering = false, dragging = false } = {}) {
+  return hovering === true || dragging === true;
+}
+
+export function screenSourceRotation({
+  displayWidth,
+  displayHeight,
+  sourceWidth,
+  sourceHeight,
+  orientation,
+} = {}) {
+  if (!(displayWidth > 0) || !(displayHeight > 0) || !(sourceWidth > 0) || !(sourceHeight > 0)) {
+    return 0;
+  }
+  const displayLandscape = displayWidth > displayHeight;
+  const sourceLandscape = sourceWidth > sourceHeight;
+  if (displayLandscape === sourceLandscape) return 0;
+  return orientation === "landscape-right" ? 90 : -90;
+}
+
+export function prepareScreenshotDrag(dataTransfer, { file, fileUri, filePath } = {}) {
+  if (!dataTransfer || !file) return false;
+  dataTransfer.effectAllowed = "copy";
+  const name = file.name || "screenshot.png";
+  const type = file.type || "image/png";
+  const hasPath = typeof filePath === "string" && filePath.length > 0;
+  const hasUri = typeof fileUri === "string" && fileUri.length > 0;
+  try {
+    if (hasPath) {
+      dataTransfer.setData("CodeFiles", JSON.stringify([filePath]));
+    }
+    if (hasUri) {
+      dataTransfer.setData("ResourceURLs", JSON.stringify([fileUri]));
+      dataTransfer.setData("application/vnd.code.uri-list", fileUri);
+      dataTransfer.setData("text/uri-list", fileUri);
+      dataTransfer.setData("DownloadURL", `${type}:${name}:${fileUri}`);
+    }
+  } catch {
+    // Dragstart can lock MIME types in Chromium.
+  }
+  // VS Code chat reads file.path from disk. A Blob File only has a name, so chat
+  // attaches a filename chip instead of the PNG. Skip it when a real path exists.
+  if (!hasPath) {
+    try {
+      dataTransfer.items?.add?.(file);
+    } catch {
+      // Some hosts reject File items on the drag payload.
+    }
+  }
+  return true;
+}
+
 export function emptySelectionPresentation() {
   return {
     tone: "accent",

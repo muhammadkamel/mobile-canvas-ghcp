@@ -140,6 +140,25 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
   receive({ type: "operation-result", id: saveRequest.id });
   await save;
 
+  const staged = transport.stageBlob(
+    new Blob(["png"], { type: "image/png" }),
+    "screen.png",
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const stageRequest = outbound.shift();
+  assert.equal(stageRequest.type, "stage");
+  assert.equal(stageRequest.suggestedName, "screen.png");
+  assert.equal(stageRequest.bytes.byteLength, 3);
+  receive({
+    type: "operation-result",
+    id: stageRequest.id,
+    uri: "file:///tmp/screen.png",
+    path: "/tmp/screen.png",
+  });
+  const stagedResult = await staged;
+  assert.equal(stagedResult.uri, "file:///tmp/screen.png");
+  assert.equal(stagedResult.path, "/tmp/screen.png");
+
   transport.setViewTitle("Pixel 6", "Android 15 · booted");
   const titleRequest = outbound.shift();
   assert.equal(titleRequest.type, "view-title");

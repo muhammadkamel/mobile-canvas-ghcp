@@ -12,10 +12,15 @@ import {
   organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
+  screenshotFileName,
+  SCREENSHOT_PREVIEW_MS,
   shouldDrainIdleDecoder,
+  shouldHoldScreenshotPreview,
   shouldShowConnectingStatus,
   startupLiveViewPresentation,
   storeDeviceId,
+  prepareScreenshotDrag,
+  screenSourceRotation,
 } from "../../web/canvas-state.js";
 
 test("drains codecs whose streams can stop with buffered frames", () => {
@@ -278,4 +283,100 @@ test("starts live view without asking to select a device", () => {
   const empty = emptySelectionPresentation();
   assert.equal(empty.title, "Select a device");
   assert.equal(empty.action.id, "create");
+});
+
+test("names a screenshot from the device and a timestamp", () => {
+  assert.equal(screenshotFileName("Pixel 9 Pro", 1700000000000), "pixel-9-pro-1700000000000.png");
+  assert.equal(screenshotFileName("", 1), "device-1.png");
+  assert.equal(screenshotFileName("  --  ", 2), "device-2.png");
+  assert.equal(SCREENSHOT_PREVIEW_MS, 8_000);
+});
+
+test("holds the screenshot preview while hovering or dragging", () => {
+  assert.equal(shouldHoldScreenshotPreview({}), false);
+  assert.equal(shouldHoldScreenshotPreview({ hovering: true }), true);
+  assert.equal(shouldHoldScreenshotPreview({ dragging: true }), true);
+  assert.equal(shouldHoldScreenshotPreview({ hovering: false, dragging: false }), false);
+});
+
+test("rotates a screenshot whose aspect disagrees with the display", () => {
+  assert.equal(screenSourceRotation({
+    displayWidth: 393,
+    displayHeight: 852,
+    sourceWidth: 1080,
+    sourceHeight: 2400,
+    orientation: "portrait",
+  }), 0);
+  assert.equal(screenSourceRotation({
+    displayWidth: 393,
+    displayHeight: 852,
+    sourceWidth: 2400,
+    sourceHeight: 1080,
+    orientation: "portrait",
+  }), -90);
+  assert.equal(screenSourceRotation({
+    displayWidth: 852,
+    displayHeight: 393,
+    sourceWidth: 1080,
+    sourceHeight: 2400,
+    orientation: "landscape-right",
+  }), 90);
+  assert.equal(screenSourceRotation({
+    displayWidth: 852,
+    displayHeight: 393,
+    sourceWidth: 1080,
+    sourceHeight: 2400,
+    orientation: "landscape-left",
+  }), -90);
+  assert.equal(screenSourceRotation({}), 0);
+});
+
+test("attaches a PNG file to a screenshot drag without a filename text payload", () => {
+  const types = [];
+  const files = [];
+  const dataTransfer = {
+    setData(type, value) {
+      types.push([type, value]);
+    },
+    items: {
+      add(file) {
+        files.push(file);
+      },
+    },
+  };
+  const file = { name: "pixel.png", type: "image/png" };
+  assert.equal(
+    prepareScreenshotDrag(dataTransfer, {
+      file,
+      fileUri: "file:///tmp/pixel.png",
+      filePath: "/tmp/pixel.png",
+    }),
+    true,
+  );
+  assert.equal(dataTransfer.effectAllowed, "copy");
+  assert.equal(files.length, 0);
+  assert.deepEqual(types, [
+    ["CodeFiles", JSON.stringify(["/tmp/pixel.png"])],
+    ["ResourceURLs", JSON.stringify(["file:///tmp/pixel.png"])],
+    ["application/vnd.code.uri-list", "file:///tmp/pixel.png"],
+    ["text/uri-list", "file:///tmp/pixel.png"],
+    ["DownloadURL", "image/png:pixel.png:file:///tmp/pixel.png"],
+  ]);
+  assert.equal(types.some(([type]) => type === "text/plain"), false);
+  assert.equal(prepareScreenshotDrag({}, {}), false);
+});
+
+test("falls back to a Blob file when the screenshot was not staged", () => {
+  const files = [];
+  const dataTransfer = {
+    setData() {},
+    items: {
+      add(file) {
+        files.push(file);
+      },
+    },
+  };
+  const file = { name: "pixel.png", type: "image/png" };
+  assert.equal(prepareScreenshotDrag(dataTransfer, { file }), true);
+  assert.equal(files[0], file);
 });

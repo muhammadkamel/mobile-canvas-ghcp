@@ -71,3 +71,19 @@ test("starts on the live view instead of the empty selector", () => {
   assert.match(html, /Connecting to a running simulator or emulator/);
   assert.match(html, /id="selector-detail"[^>]*>Opening live view</);
 });
+
+test("screenshot capture shows a draggable preview instead of saving immediately", () => {
+  assert.match(html, /data-action="screenshot"[^>]+aria-label="Take screenshot"/);
+  assert.match(html, /id="screenshot-preview"[^>]+draggable="true"/);
+  assert.match(html, /id="screenshot-preview-image"/);
+  assert.match(html, /id="screenshot-preview-dismiss"/);
+  assert.match(rule(".screenshot-preview"), /position:\s*fixed/);
+  assert.match(rule(".screenshot-preview"), /right:\s*16px/);
+  assert.match(rule(".screenshot-preview"), /bottom:\s*16px/);
+  assert.match(rule(".screenshot-preview"), /z-index:\s*70/);
+  assert.match(rule(".screenshot-preview"), /width:\s*fit-content/);
+  assert.match(rule(".screenshot-preview-image"), /width:\s*56px/);
+  assert.match(rule(".screenshot-preview-image"), /object-fit:\s*cover/);
+  assert.doesNotMatch(rule(".screenshot-preview-image"), /object-fit:\s*contain|max-height:/);
+  assert.match(rule('.screenshot-preview[data-open="true"]'), /visibility:\s*visible/);
+});
